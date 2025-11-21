@@ -10,42 +10,16 @@ import numpy as np
 import faiss
 from dotenv import load_dotenv
 from google import genai
-try:
-    # Try new LangChain import paths (v0.1+)
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    # Fallback to old import path
-    try:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
-    except ImportError:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-try:
-    from langchain_community.document_loaders import TextLoader, PyPDFLoader, DirectoryLoader
-except ImportError:
-    # Fallback for older versions
-    from langchain.document_loaders import TextLoader, PyPDFLoader
-
-try:
-    from langchain.schema import Document
-except ImportError:
-    # Newer versions use langchain_core
-    try:
-        from langchain_core.documents import Document
-    except ImportError:
-        # Last resort - define a simple Document class
-        from typing import TypedDict
-        class Document(TypedDict):
-            page_content: str
-            metadata: dict
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import TextLoader, PyPDFLoader
+from langchain_core.documents import Document
 
 # Load environment variables
 script_dir = Path(__file__).parent
 project_root = script_dir.parent
-for env_path in [script_dir / ".env", project_root / ".env.local", project_root / ".env"]:
-    if env_path.exists():
-        load_dotenv(env_path)
-        break
+
+load_dotenv(Path(__file__).parent / ".env")
 
 
 class RAGSystem:
@@ -55,8 +29,8 @@ class RAGSystem:
         self,
         knowledge_base_dir: Optional[Path] = None,
         embedding_model: str = "google",
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200
+        chunk_size: int = 500,  # Smaller chunks for better precision
+        chunk_overlap: int = 50  # Less overlap to avoid duplicates
     ):
         """
         Initialize RAG system
@@ -87,11 +61,13 @@ class RAGSystem:
                 print("⚠️  GOOGLE_API_KEY not found, falling back to local embeddings")
                 self.embedding_model = "local"
         
-        # Initialize text splitter
+        # Initialize text splitter with better separators for FAQ-style content
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
+            separators=["\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""],  # Respect headers
+            keep_separator=True  # Keep section headers in chunks
         )
         
         # FAISS index and metadata
@@ -137,40 +113,23 @@ class RAGSystem:
         """Generate embedding for text"""
         if self.embedding_model == "google" and self.embedding_client:
             try:
-                # Try Google's embedding API (various possible formats)
-                # Method 1: Try direct API call
-                try:
-                    result = self.embedding_client.models.embed_content(
-                        model="text-embedding-004",
-                        content=text
-                    )
-                    if hasattr(result, 'embedding'):
-                        embedding = np.array(result.embedding, dtype=np.float32)
-                        return embedding
-                except:
-                    pass
-                
-                # Method 2: Try alternative API format
-                try:
-                    # Some versions use different API structure
-                    embedding_service = self.embedding_client.models
-                    result = embedding_service.embed_content(
-                        model="text-embedding-004",
-                        content=text
-                    )
+                result = self.embedding_client.models.embed_content(
+                    model="text-embedding-004",
+                    contents=text
+                )
+                # Handle different response formats
+                if hasattr(result, 'embedding'):
                     embedding = np.array(result.embedding, dtype=np.float32)
-                    return embedding
-                except:
-                    pass
-                
-                # If both fail, fall through to local
-                print("⚠️  Google embedding API format not recognized, using local embeddings")
-                self.embedding_model = "local"
+                elif hasattr(result, 'embeddings') and len(result.embeddings) > 0:
+                    embedding = np.array(result.embeddings[0].values, dtype=np.float32)
+                else:
+                    raise AttributeError("Could not find embedding in response")
+                return embedding
             except Exception as e:
-                print(f"⚠️  Google embedding failed: {e}, trying local")
+                print(f"⚠️  Google embedding failed: {e}, falling back to local")
                 self.embedding_model = "local"
         
-        # Use local embeddings (sentence-transformers) - more reliable
+        # Use local embeddings (sentence-transformers)
         try:
             from sentence_transformers import SentenceTransformer
             if not hasattr(self, '_local_model'):
@@ -255,20 +214,23 @@ class RAGSystem:
             embedding = self._generate_embedding(doc.page_content)
             embeddings.append(embedding)
             
-            # Store metadata
+            # Store metadata with more context
             self.metadata.append({
                 'content': doc.page_content,
                 'source': doc.metadata.get('source', 'unknown'),
+                'page': doc.metadata.get('page', 0),
                 'chunk_index': i
             })
         
-        # Create FAISS index
+        # Create FAISS index with better similarity metric
         print("🔍 Creating FAISS index...")
         embeddings_array = np.array(embeddings).astype('float32')
-        dimension = embeddings_array.shape[1]
         
-        # Use L2 distance (Inner Product for cosine similarity)
-        self.index = faiss.IndexFlatL2(dimension)
+        # Normalize for cosine similarity (better than L2)
+        faiss.normalize_L2(embeddings_array)
+        
+        dimension = embeddings_array.shape[1]
+        self.index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
         self.index.add(embeddings_array)
         
         print(f"✅ Index built with {self.index.ntotal} vectors (dimension: {dimension})")
@@ -276,49 +238,91 @@ class RAGSystem:
         # Save index
         self._save_index()
     
-    def retrieve(self, query: str, top_k: int = 3) -> List[Dict]:
+    def _rerank_results(self, query: str, results: List[Dict]) -> List[Dict]:
+        """
+        Simple reranking based on keyword matching
+        Boosts results that contain query terms
+        """
+        query_terms = set(query.lower().split())
+        
+        for result in results:
+            content_lower = result['content'].lower()
+            
+            # Count matching terms
+            matches = sum(1 for term in query_terms if term in content_lower)
+            term_coverage = matches / len(query_terms) if query_terms else 0
+            
+            # Combine semantic similarity with term matching
+            # 70% semantic, 30% keyword matching
+            result['rerank_score'] = (result['score'] * 0.7) + (term_coverage * 0.3)
+        
+        # Sort by reranked score
+        results.sort(key=lambda x: x['rerank_score'], reverse=True)
+        return results
+    
+    def retrieve(self, query: str, top_k: int = 3, score_threshold: float = 0.5) -> List[Dict]:
         """
         Retrieve relevant chunks for a query
         
         Args:
             query: User query
             top_k: Number of top results to return
+            score_threshold: Minimum similarity score (0-1, higher is more similar)
             
         Returns:
-            List of dictionaries with 'content', 'source', and 'score'
+            List of dictionaries with 'content', 'source', 'score', and metadata
         """
         if self.index is None or len(self.metadata) == 0:
             print("⚠️  Index not built. Call build_index() first.")
             return []
         
-        # Generate query embedding
+        # Generate and normalize query embedding
         query_embedding = self._generate_embedding(query)
         query_embedding = query_embedding.reshape(1, -1).astype('float32')
+        faiss.normalize_L2(query_embedding)
         
-        # Search in FAISS
-        distances, indices = self.index.search(query_embedding, min(top_k, len(self.metadata)))
+        # Search in FAISS - get more candidates for reranking
+        top_k_search = min(top_k * 3, len(self.metadata))  # Get 3x more for filtering
+        distances, indices = self.index.search(query_embedding, top_k_search)
         
-        # Format results
+        # Format results (distances are now cosine similarities)
         results = []
         for i, idx in enumerate(indices[0]):
-            if idx < len(self.metadata):
-                result = {
-                    'content': self.metadata[idx]['content'],
-                    'source': self.metadata[idx]['source'],
-                    'score': float(distances[0][i]),
-                    'chunk_index': self.metadata[idx]['chunk_index']
-                }
-                results.append(result)
+            # Convert numpy int to Python int
+            idx = int(idx)
+            score = float(distances[0][i])
+            
+            # Skip invalid indices
+            if idx < 0 or idx >= len(self.metadata):
+                continue
+            
+            # Filter by threshold
+            if score < score_threshold:
+                continue
+                
+            result = {
+                'content': self.metadata[idx]['content'],
+                'source': self.metadata[idx]['source'],
+                'page': self.metadata[idx].get('page', 0),
+                'score': score,
+                'chunk_index': self.metadata[idx]['chunk_index']
+            }
+            results.append(result)
+            
+            # Stop when we have enough results
+            if len(results) >= top_k:
+                break
         
         return results
     
-    def retrieve_context(self, query: str, top_k: int = 3) -> str:
+    def retrieve_context(self, query: str, top_k: int = 3, max_tokens: int = 2000) -> str:
         """
-        Retrieve context as formatted string for LLM
+        Retrieve context as formatted string for LLM with token limiting
         
         Args:
             query: User query
             top_k: Number of top results to include
+            max_tokens: Approximate maximum tokens (chars/4)
             
         Returns:
             Formatted context string
@@ -329,10 +333,21 @@ class RAGSystem:
             return ""
         
         context_parts = []
+        total_chars = 0
+        max_chars = max_tokens * 4  # Rough approximation
+        
         for i, result in enumerate(results, 1):
-            context_parts.append(
-                f"[Context {i} from {Path(result['source']).name}]\n{result['content']}\n"
-            )
+            source_name = Path(result['source']).name
+            page_info = f" (page {result['page']})" if result.get('page') else ""
+            
+            chunk = f"[Context {i} from {source_name}{page_info} - relevance: {result['score']:.2f}]\n{result['content']}\n"
+            
+            # Check token limit
+            if total_chars + len(chunk) > max_chars and i > 1:
+                break
+                
+            context_parts.append(chunk)
+            total_chars += len(chunk)
         
         return "\n".join(context_parts)
 
@@ -366,8 +381,8 @@ def main():
         
         if results:
             for i, result in enumerate(results, 1):
-                print(f"\n  Result {i} (score: {result['score']:.4f}):")
-                print(f"  Source: {result['source']}")
+                print(f"\n  Result {i} (similarity: {result['score']:.4f}):")
+                print(f"  Source: {Path(result['source']).name}")
                 print(f"  Content: {result['content'][:200]}...")
         else:
             print("  No results found")
@@ -375,4 +390,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

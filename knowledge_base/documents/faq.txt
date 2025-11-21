@@ -1,0 +1,108 @@
+# Company FAQ - Knowledge Base
+
+## General Information
+
+### What is your return policy?
+We offer a 30-day return policy on all products. Items must be in original condition with tags attached. Returns are free for orders over $50. To initiate a return, please contact our customer service team or use the return portal on our website.
+
+### What are your shipping options?
+We offer several shipping options:
+- Standard Shipping: 5-7 business days, free on orders over $50
+- Express Shipping: 2-3 business days, $9.99
+- Overnight Shipping: Next business day, $19.99
+- International Shipping: Available to select countries, 7-14 business days
+
+### How do I track my order?
+Once your order ships, you'll receive a tracking number via email. You can track your order status on our website using the order number or tracking number. You can also contact customer service for assistance.
+
+## Customer Service
+
+### How do I contact support?
+You can reach our customer service team through multiple channels:
+- Email: support@company.com (response within 24 hours)
+- Phone: 1-800-COMPANY (Monday-Friday, 9 AM - 6 PM EST)
+- Live Chat: Available on our website (Monday-Saturday, 9 AM - 8 PM EST)
+- Help Center: Visit help.company.com for self-service options
+
+### What are your customer service hours?
+Our customer service team is available:
+- Monday-Friday: 9:00 AM - 6:00 PM EST
+- Saturday: 10:00 AM - 4:00 PM EST
+- Sunday: Closed
+- Live chat has extended hours: Monday-Saturday, 9 AM - 8 PM EST
+
+### Can I modify or cancel my order?
+Orders can be modified or cancelled within 2 hours of placement. After that, orders are processed and cannot be changed. If you need to make changes, contact customer service immediately. Once an order ships, you'll need to use our return process.
+
+## Products
+
+### Do you offer product warranties?
+Yes, all products come with a manufacturer's warranty. Warranty periods vary by product category:
+- Electronics: 1-2 years
+- Appliances: 1-3 years
+- General merchandise: 90 days
+- Extended warranties are available for purchase at checkout
+
+### Are your products authentic?
+Yes, we guarantee 100% authenticity. All products are sourced directly from authorized distributors and manufacturers. We have strict quality control measures in place to ensure authenticity.
+
+### Do you offer product recommendations?
+Yes! Our product recommendation engine uses AI to suggest products based on your browsing history, preferences, and purchase patterns. You can also speak with our product specialists for personalized recommendations.
+
+## Account & Orders
+
+### How do I create an account?
+Creating an account is easy:
+1. Click "Sign Up" on our website
+2. Enter your email and create a password
+3. Verify your email address
+4. Complete your profile (optional)
+
+### How do I reset my password?
+If you've forgotten your password:
+1. Go to the login page
+2. Click "Forgot Password"
+3. Enter your email address
+4. Check your email for reset instructions
+5. Follow the link to create a new password
+
+### Can I save items for later?
+Yes! You can add items to your wishlist or save them to your cart. Wishlist items are saved indefinitely, while cart items are saved for 30 days.
+
+## Payment & Billing
+
+### What payment methods do you accept?
+We accept:
+- Credit cards (Visa, Mastercard, American Express, Discover)
+- Debit cards
+- PayPal
+- Apple Pay
+- Google Pay
+- Buy now, pay later options (Klarna, Afterpay)
+
+### Is my payment information secure?
+Yes, we use industry-standard SSL encryption and PCI DSS compliance to protect your payment information. We never store your full credit card details on our servers.
+
+### Do you offer payment plans?
+Yes, we offer flexible payment plans through our partners:
+- Klarna: Pay in 4 interest-free installments
+- Afterpay: Split payments into 4 installments
+- Store credit: Available for qualifying purchases
+
+## Technical Support
+
+### Do you provide technical support?
+Yes, we offer technical support for all products we sell. Support includes:
+- Installation assistance
+- Troubleshooting guides
+- Video tutorials
+- Live technical support via phone or chat
+- Email support for complex issues
+
+### How do I access product manuals?
+Product manuals are available in multiple ways:
+- Download from the product page
+- Access through your account's "My Products" section
+- Request via email from customer service
+- Available in our help center database
+
