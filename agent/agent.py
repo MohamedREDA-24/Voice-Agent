@@ -1,4 +1,3 @@
-# agent_with_rag_strict.py - Agent responds ONLY from RAG knowledge base
 import asyncio
 import os
 import time
@@ -23,23 +22,46 @@ for env_path in [script_dir / ".env", project_root / ".env.local", project_root 
 
 
 class GeminiVoiceAgentWithRAG:
-    def __init__(self, use_rag: bool = True, max_history: int = 10):
+    def __init__(self, use_rag: bool = True):
         self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
         self.model = "gemini-2.5-flash-native-audio-preview-09-2025"
         self.use_rag = use_rag
-        self.max_history = max_history
-        
-        # Conversation history
-        self.conversation_history: List[Dict[str, str]] = []
         
         # Initialize RAG system
+        self.rag = None
+        self.knowledge_base_summary = ""
+        
         if self.use_rag:
-            print("🔧 Initializing RAG system...")
-            self.rag = RAGSystem(embedding_model="google")
-            if self.rag.index is None:
-                print("📚 Building RAG index (first time setup)...")
-                self.rag.build_index()
-            print(f"✅ RAG ready with {len(self.rag.metadata)} chunks")
+            print("=" * 60)
+            print("🔧 INITIALIZING RAG SYSTEM")
+            print("=" * 60)
+            try:
+                self.rag = RAGSystem(embedding_model="google")
+                print("✅ RAG system initialized")
+                
+                # Build/load index
+                if self.rag.index is None or len(self.rag.metadata) == 0:
+                    print("📚 Building RAG index...")
+                    self.rag.build_index()
+                    
+                if self.rag.index is not None and len(self.rag.metadata) > 0:
+                    print(f"✅ RAG ready with {len(self.rag.metadata)} chunks")
+                    
+                    # Prepare knowledge base summary for system prompt
+                    self.knowledge_base_summary = self._prepare_knowledge_summary()
+                    print(f"✅ Prepared knowledge base summary ({len(self.knowledge_base_summary)} chars)")
+                else:
+                    print("⚠️ WARNING: No documents indexed")
+                    self.use_rag = False
+                    
+            except Exception as e:
+                print(f"❌ Failed to initialize RAG: {e}")
+                import traceback
+                traceback.print_exc()
+                self.rag = None
+                self.use_rag = False
+            
+            print("=" * 60)
         
         self._audio_source: Optional[rtc.AudioSource] = None
         self._audio_track: Optional[rtc.LocalAudioTrack] = None
@@ -49,33 +71,32 @@ class GeminiVoiceAgentWithRAG:
         self._current_session = None
         self._is_running = True
         self._room = None
-        
-        # Track current turn state
-        self._current_user_query = None
-        self._context_sent_for_query = None
-        self._current_agent_response = ""
 
-    def _add_to_history(self, role: str, content: str):
-        """Add message to conversation history with size limit"""
-        self.conversation_history.append({"role": role, "content": content})
-        
-        # Keep only the last N exchanges (user + assistant pairs)
-        if len(self.conversation_history) > self.max_history * 2:
-            self.conversation_history = self.conversation_history[-(self.max_history * 2):]
-        
-        print(f"📝 History size: {len(self.conversation_history)//2} exchanges")
-
-    def _format_history_for_context(self) -> str:
-        """Format conversation history as context"""
-        if not self.conversation_history:
+    def _prepare_knowledge_summary(self) -> str:
+        """Prepare a comprehensive knowledge base summary from all chunks"""
+        if not self.rag or not self.rag.metadata:
             return ""
         
-        formatted = "\n\nPrevious conversation:\n"
-        for msg in self.conversation_history[-6:]:  # Last 3 exchanges
-            role = "User" if msg["role"] == "user" else "Assistant"
-            formatted += f"{role}: {msg['content']}\n"
+        # Get all unique content from the knowledge base
+        all_content = []
+        seen_content = set()
         
-        return formatted
+        for meta in self.rag.metadata:
+            content = meta.get('content', '').strip()
+            # Use first 100 chars as key to avoid exact duplicates
+            content_key = content[:100]
+            if content and content_key not in seen_content:
+                seen_content.add(content_key)
+                all_content.append(content)
+        
+        # Combine into a structured knowledge base
+        knowledge_text = "\n\n".join(all_content[:20])  # Limit to 20 chunks to stay within limits
+        
+        return f"""KNOWLEDGE BASE:
+{knowledge_text}
+
+You must answer questions using ONLY the information from this knowledge base. If the answer is not in the knowledge base, say "I don't have that information in my knowledge base."
+"""
 
     async def _setup_audio_track(self, room: rtc.Room):
         """Create and publish audio track"""
@@ -94,13 +115,12 @@ class GeminiVoiceAgentWithRAG:
 
         await self._setup_audio_track(self._room)
 
-        # Start session first
+        # Start session
         session_task = asyncio.create_task(self._maintain_session())
         
         # Setup audio track handler
         audio_task = None
         
-        # Wait for participant to join and track to be available
         @self._room.on("track_subscribed")
         def on_track_subscribed(track: rtc.Track, *_):
             nonlocal audio_task
@@ -117,7 +137,6 @@ class GeminiVoiceAgentWithRAG:
                     break
         
         try:
-            # Keep the agent running - only wait for session_task
             if audio_task:
                 await asyncio.gather(session_task, audio_task)
             else:
@@ -146,36 +165,43 @@ class GeminiVoiceAgentWithRAG:
                     break
 
     async def _run_continuous_session(self):
-        """Run ONE continuous session that persists across turns"""
-        # STRICT system instruction - ONLY use knowledge base
-        system_instruction = """You are a helpful knowledge base assistant. Follow these rules:
+        """Run continuous audio session with knowledge base in system prompt"""
+        
+        # Build system instruction with embedded knowledge base
+        base_instruction = """You are a helpful voice assistant with access to a knowledge base. 
 
-IMPORTANT RULES:
-1. Answer questions using ONLY the information from [CONTEXT FROM KNOWLEDGE BASE]
-2. The context will be provided with each question - read it carefully
-3. If the context contains relevant information, answer confidently and naturally
-4. Only say you don't have information if the context is truly empty or completely irrelevant
-5. You may use [PREVIOUS CONVERSATION] to understand what "it", "that", "the previous one" refers to
-6. Be conversational and helpful - you're speaking, not writing
-7. Keep responses concise but complete
+RULES:
+1. Answer questions using the knowledge base provided below
+2. Be conversational and natural - you're speaking, not writing
+3. Keep responses concise (2-3 sentences max)
+4. If the answer isn't in the knowledge base, say "I don't have that information"
+5. Never make up information not in the knowledge base
 
-Example:
-- Context has info about topic → Answer naturally using that info
-- Context is empty or unrelated → "I don't have that information in my knowledge base"
-- User asks "what about X?" after discussing Y → Check if context has X info, or if they mean Y from history"""
+"""
+        
+        system_instruction = base_instruction + self.knowledge_base_summary if self.use_rag else base_instruction
 
         config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": system_instruction
+            "response_modalities": ["AUDIO"],  # Audio-only for native audio model
+            "system_instruction": system_instruction,
+            "speech_config": {
+                "voice_config": {
+                    "prebuilt_voice_config": {
+                        "voice_name": "Puck"
+                    }
+                }
+            }
         }
         
-        print("🔄 Starting continuous session (STRICT RAG MODE)...")
+        rag_status = "ENABLED ✅" if self.use_rag else "DISABLED ❌"
+        print(f"\n🔄 Starting session (RAG: {rag_status})")
+        print(f"   System prompt length: {len(system_instruction)} chars")
         
         async with self.client.aio.live.connect(model=self.model, config=config) as session:
             self._current_session = session
-            print("✅ Session connected - responding ONLY from knowledge base!")
+            print(f"✅ Session connected with knowledge base embedded\n")
             
-            # Main loop - continuously handle responses
+            # Main loop
             while self._is_running:
                 try:
                     async for response in session.receive():
@@ -183,121 +209,34 @@ Example:
                             break
                         await self._handle_response(response)
                 except Exception as e:
-                    print(f"⚠️ Response handling error: {e}")
+                    print(f"⚠️ Response error: {e}")
                     if self._is_running:
-                        # Don't break - continue receiving
                         await asyncio.sleep(0.1)
                     else:
                         break
 
     async def _handle_response(self, response):
-        """Handle each response in the continuous session"""
+        """Handle audio responses"""
         if not hasattr(response, "server_content") or not response.server_content:
             return
         
         server_content = response.server_content
         
-        # 1. Detect user speech and transcription
-        if hasattr(server_content, "user_content") and server_content.user_content:
-            for part in server_content.user_content.parts:
-                if hasattr(part, "text") and part.text:
-                    self._current_user_query = part.text
-                    print(f"👤 User: {self._current_user_query}")
-        
-        # 2. When we have a NEW transcription, inject context
-        if self._current_user_query and self._current_user_query != self._context_sent_for_query:
-            await self._inject_context_for_query(self._current_user_query)
-            self._context_sent_for_query = self._current_user_query
-            self._current_agent_response = ""
-        
-        # 3. Handle model's audio response
+        # Handle model's audio response
         if hasattr(server_content, "model_turn") and server_content.model_turn:
             for part in server_content.model_turn.parts:
                 if hasattr(part, "inline_data") and part.inline_data:
                     await self._play_audio(part.inline_data.data)
                 
                 if hasattr(part, "text") and part.text:
-                    print(f"🤖 Agent: {part.text}")
-                    self._current_agent_response += part.text + " "
+                    print(f"🤖 {part.text}")
         
-        # 4. Check for turn completion
+        # Turn complete
         if hasattr(server_content, "turn_complete") and server_content.turn_complete:
-            # Add both messages to history
-            if self._current_user_query:
-                self._add_to_history("user", self._current_user_query)
-            
-            if self._current_agent_response.strip():
-                self._add_to_history("assistant", self._current_agent_response.strip())
-            
-            print(f"✅ Turn complete - waiting for next interaction...\n")
-            
-            # Reset turn state but KEEP SESSION ALIVE
-            self._current_user_query = None
-            self._context_sent_for_query = None
-            self._current_agent_response = ""
-
-    async def _inject_context_for_query(self, query: str):
-        """Inject RAG context and conversation history for current query"""
-        enriched_parts = []
-        
-        # Add RAG context - REQUIRED for strict mode
-        if self.use_rag:
-            rag_context = await self._retrieve_context(query, top_k=5)
-            if rag_context and rag_context.strip():
-                print(f"📚 Injecting RAG context ({len(rag_context)} chars)...")
-                enriched_parts.append(f"[CONTEXT FROM KNOWLEDGE BASE]\n{rag_context}\n[END OF CONTEXT]")
-            else:
-                print(f"⚠️ No context found - agent will say it doesn't know")
-                enriched_parts.append("[CONTEXT FROM KNOWLEDGE BASE]\n(No information available)\n[END OF CONTEXT]")
-        
-        # Add conversation history for reference resolution
-        if self.conversation_history:
-            history_context = self._format_history_for_context()
-            enriched_parts.append(f"[PREVIOUS CONVERSATION]{history_context}")
-        
-        # Add current user question
-        enriched_parts.append(f"[USER QUESTION]\n{query}")
-        
-        # Combine and send
-        enriched_message = "\n\n".join(enriched_parts)
-        
-        # Debug: print what we're sending
-        print(f"📤 Sending to model:\n{enriched_message[:300]}...")
-        
-        await self._current_session.send_text(enriched_message)
-
-    async def _retrieve_context(self, query: str, top_k: int = 5) -> str:
-        """Retrieve relevant context from RAG system"""
-        if not self.use_rag:
-            return ""
-        
-        try:
-            print(f"🔍 Searching knowledge base for: '{query}'")
-            loop = asyncio.get_event_loop()
-            context = await loop.run_in_executor(
-                None, 
-                self.rag.retrieve_context, 
-                query, 
-                top_k
-            )
-            
-            if context and context.strip():
-                # Show first 200 chars for debugging
-                preview = context[:200].replace('\n', ' ')
-                print(f"   ✅ Found {len(context)} chars: {preview}...")
-                return context
-            else:
-                print(f"   ❌ No relevant context found in knowledge base")
-                return ""
-                
-        except Exception as e:
-            print(f"⚠️ RAG error: {e}")
-            import traceback
-            traceback.print_exc()
-            return ""
+            print("✅ Turn complete\n")
 
     async def _handle_audio_track(self, track: rtc.Track):
-        """Process incoming audio continuously"""
+        """Process incoming audio"""
         audio_stream = rtc.AudioStream(track)
         print("🎧 Processing audio stream")
         
@@ -311,7 +250,7 @@ Example:
                 if pcm_data and self._current_session:
                     await self._send_audio_to_gemini(pcm_data)
         except asyncio.CancelledError:
-            print("🎧 Audio stream handler cancelled")
+            print("🎧 Audio stream cancelled")
         except Exception as e:
             print(f"❌ Audio error: {e}")
 
@@ -369,7 +308,7 @@ Example:
 
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
             chunk_size = 480
-            
+             
             for i in range(0, len(audio_array), chunk_size):
                 if not self._is_running:
                     break
@@ -395,7 +334,7 @@ Example:
 
 async def entrypoint(ctx: JobContext):
     print(f"🎯 Joining room: {ctx.room.name}")
-    agent = GeminiVoiceAgentWithRAG(use_rag=True, max_history=10)
+    agent = GeminiVoiceAgentWithRAG(use_rag=True)
     await agent.process_conversation(ctx)
 
 
@@ -404,8 +343,10 @@ if __name__ == "__main__":
     missing = [v for v in required_vars if not os.getenv(v)]
     
     if missing:
-        print(f"❌ Missing: {', '.join(missing)}")
+        print(f"❌ Missing environment variables: {', '.join(missing)}")
         exit(1)
 
-    print("🚀 Starting Gemini Voice Agent - STRICT RAG MODE (Knowledge Base Only)")
+    print("=" * 60)
+    print("🚀 Starting Gemini Voice Agent with RAG")
+    print("=" * 60)
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
