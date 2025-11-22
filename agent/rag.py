@@ -113,6 +113,7 @@ class RAGSystem:
         """Generate embedding for text"""
         if self.embedding_model == "google" and self.embedding_client:
             try:
+                print("🔵 Using Google embedding model: text-embedding-004")
                 result = self.embedding_client.models.embed_content(
                     model="text-embedding-004",
                     contents=text
@@ -135,6 +136,7 @@ class RAGSystem:
             if not hasattr(self, '_local_model'):
                 print("📦 Loading sentence-transformers model (first time may take a moment)...")
                 self._local_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("🟢 Using local embedding model: all-MiniLM-L6-v2 (sentence-transformers)")
             embedding = self._local_model.encode(text, convert_to_numpy=True)
             return embedding.astype(np.float32)
         except ImportError:
