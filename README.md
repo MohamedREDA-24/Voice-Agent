@@ -143,15 +143,24 @@ Then open `http://localhost:3000` in your browser.
 Voice-Agent/
 ├── agent/              # Python agent code
 │   ├── agent.py       # Main agent implementation
-│   ├── rag.py        # RAG system
+│   ├── rag.py        # RAG system with embedding generation
+│   ├── test_rag.py   # RAG system testing
 │   └── requirements.txt
-├── web/               # React frontend (optional)
-│   └── src/
-├── server/            # Token server (for web UI)
-│   └── token_server.py
+├── web/               # React frontend
+│   ├── src/
+│   │   └── components/
+│   │       └── VoiceAgent.jsx  # Main UI component
+│   └── package.json
+├── server/            # Token server (required for web UI)
+│   ├── token_server.py
+│   ├── test_token.py  # Token generation test
+│   └── requirements.txt
 └── knowledge_base/    # Documents and embeddings
-    ├── documents/     # Your knowledge base files
-    └── embeddings/   # Generated FAISS index
+    ├── documents/     # Your knowledge base files (.txt, .pdf)
+    └── embeddings/    # Generated FAISS index
+        └── faiss_index/
+            ├── index.faiss
+            └── metadata.pkl
 ```
 
 For detailed project structure and component descriptions, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -170,8 +179,6 @@ The agent uses a RAG (Retrieval-Augmented Generation) system to answer questions
 
 - `faq.txt` - Frequently asked questions
 - `product_info.txt` - Product information
-
-For detailed information about RAG system, embeddings, and retrieval, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## How It Works
 
