@@ -13,6 +13,10 @@ A voice-enabled AI agent powered by Gemini that uses Retrieval-Augmented Generat
 - 🎮 LiveKit Playground support
 - 🎯 Strict knowledge base mode (only answers from provided documents)
 
+## Screenshot
+
+![Voice Agent Web UI](screenshot.png)
+
 ## Architecture
 
 For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
